@@ -1,6 +1,8 @@
+
 import threading
 import time
 import re
+import os
 from collections import deque
 
 import glfw
@@ -24,18 +26,31 @@ COLORS = {
 }
 
 def tail_file(path, callback):
-    with open(path, "r") as f:
+    while not os.path.exists(path):
+        time.sleep(0.5)
+    f = open(path, "r")
+    try:
         f.seek(0, 2)
         while True:
             line = f.readline()
             if not line:
                 time.sleep(0.1)
+                if not os.path.exists(path):
+                    f.close()
+                    while not os.path.exists(path):
+                        time.sleep(0.5)
+                    f = open(path, "r")
+                    f.seek(0, 2)
                 continue
             callback(line.rstrip())
+    finally:
+        try:
+            f.close()
+        except Exception:
+            pass
 
 def log_thread(log_lines, timeline, lock):
     start_time = None
-    stage_order = ["Bootloader", "Kernel", "Rootfs"]
     current_stage = None
 
     def process_line(line: str):
@@ -50,7 +65,7 @@ def log_thread(log_lines, timeline, lock):
                 timeline["Bootloader"]["start"] = now
             return
 
-        if PATTERNS["Bootloader"].search(line) and start_time is not None:
+        if PATTERNS["Bootloader"].search(line) and start_time is not None and current_stage != "Kernel":
             with lock:
                 timeline["Bootloader"]["end"] = now
                 timeline["Kernel"]["start"] = now
@@ -75,18 +90,38 @@ def log_thread(log_lines, timeline, lock):
 def compute_durations(timeline):
     durations = {}
     for stage in STAGES:
-        start = timeline[stage]["start"]
-        end = timeline[stage]["end"]
-        durations[stage] = end - start if start and end else 0.0
+        start = timeline[stage].get("start")
+        end = timeline[stage].get("end")
+        try:
+            durations[stage] = (end - start) if (start and end) else 0.0
+        except Exception:
+            durations[stage] = 0.0
     return durations
+
+def get_content_region_avail_safe():
+    try:
+        avail = imgui.get_content_region_avail()
+        if hasattr(avail, "x") and hasattr(avail, "y"):
+            return (avail.x, avail.y)
+        return (float(avail[0]), float(avail[1]))
+    except Exception:
+        try:
+            wp = imgui.get_window_position()
+            ws = imgui.get_window_size()
+            cp = imgui.get_cursor_screen_pos()
+            avail_w = ws[0] - (cp[0] - wp[0])
+            avail_h = ws[1] - (cp[1] - wp[1])
+            return (max(avail_w, 1.0), max(avail_h, 1.0))
+        except Exception:
+            return (400.0, 300.0)
 
 def draw_vertical_stack(draw_list, pos, size, durations, total):
     x, y = pos
     w, h = size
     offset = y
     for stage in STAGES:
-        dur = durations[stage]
-        ratio = dur / total if total > 0 else 0
+        dur = durations.get(stage, 0.0)
+        ratio = (dur / total) if total > 0 else 0
         height = h * ratio
         color = imgui.get_color_u32_rgba(*COLORS[stage], 1)
         draw_list.add_rect_filled(x, offset, x + w, offset + height, color)
@@ -95,16 +130,21 @@ def draw_vertical_stack(draw_list, pos, size, durations, total):
 def draw_horizontal_bars(draw_list, pos, size, durations, total):
     x, y = pos
     w, h = size
-    bar_height = h / len(STAGES)
+    bar_height = h / max(len(STAGES), 1)
     for i, stage in enumerate(STAGES):
-        dur = durations[stage]
-        ratio = dur / total if total > 0 else 0
+        dur = durations.get(stage, 0.0)
+        ratio = (dur / total) if total > 0 else 0
         width = w * ratio
         top = y + i * bar_height
         color = imgui.get_color_u32_rgba(*COLORS[stage], 1)
         draw_list.add_rect_filled(x, top, x + width, top + bar_height - 4, color)
-        draw_list.add_text(x + 5, top + 5, imgui.get_color_u32_rgba(1,1,1,1), f"{stage}: {dur:.3f}s")
-
+        try:
+            draw_list.add_text(x + 5, top + 5, imgui.get_color_u32_rgba(1,1,1,1), f"{stage}: {dur:.3f}s")
+        except TypeError:
+            try:
+                draw_list.add_text((x + 5, top + 5), f"{stage}: {dur:.3f}s", imgui.get_color_u32_rgba(1,1,1,1))
+            except Exception:
+                pass
 
 def gui_thread(log_lines, timeline, lock):
     if not glfw.init():
@@ -128,7 +168,6 @@ def gui_thread(log_lines, timeline, lock):
             durations = compute_durations(timeline)
         total_time = sum(durations.values())
 
-        # Top-left: summary table
         imgui.set_next_window_position(0, 0)
         imgui.set_next_window_size(half_w, half_h)
         imgui.begin("Summary", False)
@@ -143,7 +182,7 @@ def gui_thread(log_lines, timeline, lock):
             for stage in STAGES:
                 start = timeline[stage]["start"]
                 end = timeline[stage]["end"]
-                dur = durations[stage]
+                dur = durations.get(stage, 0.0)
                 ratio = (dur / total_time) * 100 if total_time > 0 else 0
                 imgui.table_next_row()
                 imgui.table_next_column(); imgui.text(stage)
@@ -154,18 +193,16 @@ def gui_thread(log_lines, timeline, lock):
             imgui.end_table()
         imgui.end()
 
-        # Bottom-left: vertical stacked bar
         imgui.set_next_window_position(0, half_h)
         imgui.set_next_window_size(half_w, half_h)
         imgui.begin("Total", False)
-        avail = imgui.get_content_region_avail()
+        avail_w, avail_h = get_content_region_avail_safe()
         draw_list = imgui.get_window_draw_list()
         pos = imgui.get_cursor_screen_pos()
-        draw_vertical_stack(draw_list, pos, (avail.x, avail.y), durations, total_time)
-        imgui.invisible_button("stack", avail.x, avail.y)
+        draw_vertical_stack(draw_list, pos, (avail_w, avail_h), durations, total_time)
+        imgui.invisible_button("stack", avail_w, avail_h)
         imgui.end()
 
-        # Top-right: log viewer
         imgui.set_next_window_position(half_w, 0)
         imgui.set_next_window_size(half_w, half_h)
         imgui.begin("Log", False)
@@ -175,15 +212,14 @@ def gui_thread(log_lines, timeline, lock):
         imgui.end_child()
         imgui.end()
 
-        # Bottom-right: horizontal bars
         imgui.set_next_window_position(half_w, half_h)
         imgui.set_next_window_size(half_w, half_h)
         imgui.begin("Durations", False)
-        avail = imgui.get_content_region_avail()
+        avail_w, avail_h = get_content_region_avail_safe()
         draw_list = imgui.get_window_draw_list()
         pos = imgui.get_cursor_screen_pos()
-        draw_horizontal_bars(draw_list, pos, (avail.x, avail.y), durations, total_time)
-        imgui.invisible_button("bars", avail.x, avail.y)
+        draw_horizontal_bars(draw_list, pos, (avail_w, avail_h), durations, total_time)
+        imgui.invisible_button("bars", avail_w, avail_h)
         imgui.end()
 
         imgui.render()
@@ -192,7 +228,6 @@ def gui_thread(log_lines, timeline, lock):
 
     impl.shutdown()
     glfw.terminate()
-
 
 def main():
     log_lines = deque(maxlen=1000)
@@ -206,4 +241,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

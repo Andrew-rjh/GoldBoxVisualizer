@@ -118,33 +118,71 @@ def get_content_region_avail_safe():
 def draw_vertical_stack(draw_list, pos, size, durations, total):
     x, y = pos
     w, h = size
-    offset = y
+    margin = 20.0
+    legend_h = 20.0
+    bar_x = x + margin
+    bar_y = y + margin
+    bar_w = max(w - margin * 2, 1.0)
+    bar_h = max(h - margin * 3 - legend_h, 1.0)
+
+    axis_color = imgui.get_color_u32_rgba(1, 1, 1, 1)
+    grid_color = imgui.get_color_u32_rgba(0.6, 0.6, 0.6, 1)
+
+    draw_list.add_rect(bar_x, bar_y, bar_x + bar_w, bar_y + bar_h, axis_color)
+
+    offset = bar_y
     for stage in STAGES:
         dur = durations.get(stage, 0.0)
         ratio = (dur / total) if total > 0 else 0
-        height = h * ratio
+        height = bar_h * ratio
         color = imgui.get_color_u32_rgba(*COLORS[stage], 1)
-        draw_list.add_rect_filled(x, offset, x + w, offset + height, color)
+        draw_list.add_rect_filled(bar_x, offset, bar_x + bar_w, offset + height, color)
         offset += height
+
+    for r in [0.25, 0.5, 0.75, 1.0]:
+        ty = bar_y + bar_h * r
+        draw_list.add_line(bar_x, ty, bar_x + bar_w, ty, grid_color)
+        label = f"{total * r:.1f}s" if total > 0 else "0s"
+        draw_list.add_text(bar_x - 35, ty - 5, axis_color, label)
+
+    legend_y = bar_y + bar_h + margin
+    legend_x = bar_x
+    for stage in STAGES:
+        color = imgui.get_color_u32_rgba(*COLORS[stage], 1)
+        draw_list.add_rect_filled(legend_x, legend_y, legend_x + 15, legend_y + 15, color)
+        draw_list.add_rect(legend_x, legend_y, legend_x + 15, legend_y + 15, axis_color)
+        draw_list.add_text(legend_x + 20, legend_y, axis_color, stage)
+        legend_x += 80
+
 
 def draw_horizontal_bars(draw_list, pos, size, durations, total):
     x, y = pos
     w, h = size
-    bar_height = h / max(len(STAGES), 1)
+    margin = 20.0
+    bar_x = x + margin
+    bar_y = y + margin
+    bar_w = max(w - margin * 2, 1.0)
+    bar_h = max(h - margin * 2, 1.0)
+
+    axis_color = imgui.get_color_u32_rgba(1, 1, 1, 1)
+    grid_color = imgui.get_color_u32_rgba(0.6, 0.6, 0.6, 1)
+
+    draw_list.add_rect(bar_x, bar_y, bar_x + bar_w, bar_y + bar_h, axis_color)
+    for r in [0.25, 0.5, 0.75, 1.0]:
+        tx = bar_x + bar_w * r
+        draw_list.add_line(tx, bar_y, tx, bar_y + bar_h, grid_color)
+        label = f"{total * r:.1f}s" if total > 0 else "0s"
+        draw_list.add_text(tx - 10, bar_y - 15, axis_color, label)
+
+    bar_height = bar_h / max(len(STAGES), 1)
     for i, stage in enumerate(STAGES):
         dur = durations.get(stage, 0.0)
         ratio = (dur / total) if total > 0 else 0
-        width = w * ratio
-        top = y + i * bar_height
+        width = bar_w * ratio
+        top = bar_y + i * bar_height
         color = imgui.get_color_u32_rgba(*COLORS[stage], 1)
-        draw_list.add_rect_filled(x, top, x + width, top + bar_height - 4, color)
-        try:
-            draw_list.add_text(x + 5, top + 5, imgui.get_color_u32_rgba(1,1,1,1), f"{stage}: {dur:.3f}s")
-        except TypeError:
-            try:
-                draw_list.add_text((x + 5, top + 5), f"{stage}: {dur:.3f}s", imgui.get_color_u32_rgba(1,1,1,1))
-            except Exception:
-                pass
+        draw_list.add_rect_filled(bar_x, top + 4, bar_x + width, top + bar_height - 4, color)
+        draw_list.add_text(bar_x + width + 5, top + 5, axis_color, f"{stage}: {dur:.3f}s")
 
 def gui_thread(log_lines, timeline, lock):
     if not glfw.init():
@@ -207,8 +245,10 @@ def gui_thread(log_lines, timeline, lock):
         imgui.set_next_window_size(half_w, half_h)
         imgui.begin("Log", False)
         imgui.begin_child("log_child", 0, 0, border=True)
+        imgui.push_style_var(imgui.STYLE_ITEM_SPACING, (0, 0))
         for line in list(log_lines):
             imgui.text_unformatted(line)
+        imgui.pop_style_var()
         imgui.end_child()
         imgui.end()
 

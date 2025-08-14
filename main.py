@@ -234,8 +234,16 @@ def draw_horizontal_bars(draw_list, pos, size, displayed, max_scale):
         draw_list.add_text(bar_x + width + 6, top + 5, axis_color, f"{stage}: {dur:.3f}s")
 
 def gui_thread(log_lines, timeline, lock):
+    if "WAYLAND_DISPLAY" in os.environ:
+        try:
+            glfw.init_hint(glfw.PLATFORM, glfw.PLATFORM_X11)
+        except AttributeError:
+            os.environ.setdefault("GDK_BACKEND", "x11")
     if not glfw.init():
         raise RuntimeError("glfw.init() failed")
+    glfw.default_window_hint()
+    glfw.window_hint(glfw.DECORATED, glfw.TRUE)
+    glfw.window_hint(glfw.RESIZABLE, glfw.TRUE)
     window = glfw.create_window(1200, 800, "Boot Profiler", None, None)
     glfw.make_context_current(window)
 

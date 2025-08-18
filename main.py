@@ -260,7 +260,14 @@ def draw_horizontal_bars(draw_list, pos, size, displayed, max_scale, font):
 def gui_thread(log_lines, timeline, lock):
     if not glfw.init():
         raise RuntimeError("glfw.init() failed")
-    window = glfw.create_window(1200, 800, "Boot Profiler", None, None)
+
+    # 창 크기를 화면의 1/4로 설정
+    primary_monitor = glfw.get_primary_monitor()
+    workarea = glfw.get_monitor_workarea(primary_monitor)
+    screen_width, screen_height = workarea[2], workarea[3]
+    initial_width, initial_height = int(screen_width / 2), int(screen_height / 2)
+    
+    window = glfw.create_window(initial_width, initial_height, "Boot Profiler", None, None)
     glfw.make_context_current(window)
 
     imgui.create_context()
@@ -301,6 +308,39 @@ def gui_thread(log_lines, timeline, lock):
         glfw.poll_events()
         impl.process_inputs()
         imgui.new_frame()
+
+        # --- 단축키 처리 ---
+        # 창 위치 제어
+        monitor = glfw.get_primary_monitor()
+        workarea = glfw.get_monitor_workarea(monitor)
+        win_width, win_height = glfw.get_window_size(window)
+        
+        if imgui.is_key_pressed(glfw.KEY_INSERT, repeat=False):
+            glfw.set_window_pos(window, workarea[0], workarea[1])
+        if imgui.is_key_pressed(glfw.KEY_PAGE_UP, repeat=False):
+            glfw.set_window_pos(window, workarea[0] + workarea[2] - win_width, workarea[1])
+        if imgui.is_key_pressed(glfw.KEY_DELETE, repeat=False):
+            glfw.set_window_pos(window, workarea[0], workarea[1] + workarea[3] - win_height)
+        if imgui.is_key_pressed(glfw.KEY_PAGE_DOWN, repeat=False):
+            glfw.set_window_pos(window, workarea[0] + workarea[2] - win_width, workarea[1] + workarea[3] - win_height)
+
+        # 초기화 기능
+        if imgui.is_key_pressed(glfw.KEY_F10, repeat=False):
+            with lock:
+                # timeline과 log_lines는 참조를 공유하므로 직접 수정
+                for stage in STAGES:
+                    timeline[stage]["start"] = None
+                    timeline[stage]["end"] = None
+                log_lines.clear()
+
+            # GUI 상태 초기화
+            for s in STAGES:
+                displayed[s] = 0.0
+                anim_state[s]["running"] = False
+            left_scale = 1.0
+            right_scale = 1.0
+            displayed_left_scale = 1.0
+            displayed_right_scale = 1.0
 
         now = time.time()
         width, height = glfw.get_framebuffer_size(window)

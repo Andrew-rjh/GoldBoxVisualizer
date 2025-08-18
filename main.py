@@ -201,7 +201,7 @@ def draw_vertical_stack(draw_list, pos, size, displayed, max_scale):
         draw_list.add_text(legend_x + 22, legend_y, axis_color, stage)
         legend_x += 120
 
-def draw_horizontal_bars(draw_list, pos, size, displayed, max_scale):
+def draw_horizontal_bars(draw_list, pos, size, displayed, max_scale, font):
     x, y = pos
     w, h = size
     margin = 12.0
@@ -211,6 +211,7 @@ def draw_horizontal_bars(draw_list, pos, size, displayed, max_scale):
     bar_h = max(h - margin * 2, 1.0)
 
     axis_color = imgui.get_color_u32_rgba(1, 1, 1, 1)
+    shadow_color = imgui.get_color_u32_rgba(0, 0, 0, 0.8)
     grid_color = imgui.get_color_u32_rgba(0.6, 0.6, 0.6, 1)
 
     draw_list.add_rect(bar_x, bar_y, bar_x + bar_w, bar_y + bar_h, axis_color)
@@ -227,11 +228,34 @@ def draw_horizontal_bars(draw_list, pos, size, displayed, max_scale):
     for i, stage in enumerate(STAGES):
         dur = displayed.get(stage, 0.0)
         ratio = (dur / max_scale) if max_scale > 0 else 0
-        width = bar_w * min(max(ratio, 0.0), 1.0)
+        bar_fill_width = bar_w * min(max(ratio, 0.0), 1.0)
         top = bar_y + i * bar_height
         color = imgui.get_color_u32_rgba(*COLORS[stage], 1)
-        draw_list.add_rect_filled(bar_x, top + 4, bar_x + width, top + bar_height - 4, color)
-        draw_list.add_text(bar_x + width + 6, top + 5, axis_color, f"{stage}: {dur:.3f}s")
+        draw_list.add_rect_filled(bar_x, top + 4, bar_x + bar_fill_width, top + bar_height - 4, color)
+        
+        # 텍스트 렌더링 (위치 동적 조정 및 그림자 추가)
+        imgui.push_font(font)
+        text = f"{stage}: {dur:.3f}s"
+        text_size = imgui.calc_text_size(text)
+        text_y = top + (bar_height - text_size.y) / 2
+        
+        # 바깥쪽에 표시할 때의 기본 x 위치
+        text_x_outside = bar_x + bar_fill_width + 10
+
+        # 텍스트가 패널을 벗어나는지 확인
+        if (text_x_outside + text_size.x) > (x + w - margin):
+            # 안쪽에 표시할 때의 x 위치
+            text_x_inside = bar_x + bar_fill_width - text_size.x - 10
+            # 텍스트가 막대그래프의 시작점보다 왼쪽에 그려지는 것을 방지
+            text_x = max(bar_x + 5, text_x_inside)
+        else:
+            text_x = text_x_outside
+
+        # 그림자 효과
+        draw_list.add_text(text_x + 1, text_y + 1, shadow_color, text)
+        # 실제 텍스트
+        draw_list.add_text(text_x, text_y, axis_color, text)
+        imgui.pop_font()
 
 def gui_thread(log_lines, timeline, lock):
     if not glfw.init():
@@ -241,6 +265,23 @@ def gui_thread(log_lines, timeline, lock):
 
     imgui.create_context()
     impl = GlfwRenderer(window)
+    
+    # 폰트 로드
+    io = imgui.get_io()
+    font_path = "fonts/DejaVuSans.ttf"
+    font_bold_path = "fonts/DejaVuSans-Bold.ttf"
+    font_large_bold = None
+    try:
+        # 기본 폰트
+        io.fonts.add_font_from_file_ttf(font_path, 16)
+        # Durations 패널을 위한 크고 굵은 폰트
+        font_large_bold = io.fonts.add_font_from_file_ttf(font_bold_path, 20)
+        impl.refresh_font_texture()
+    except Exception as e:
+        print(f"폰트 로드 실패: {e}. 기본 폰트로 계속합니다.")
+        font_large_bold = io.fonts.add_font_default()
+
+
     no_resize_no_move_flags = imgui.WINDOW_NO_RESIZE | imgui.WINDOW_NO_MOVE
 
     # 표시값 + 애니 상태
@@ -252,6 +293,9 @@ def gui_thread(log_lines, timeline, lock):
     right_scale = 1.0
     displayed_left_scale = float(left_scale)
     displayed_right_scale = float(right_scale)
+
+    # 강조 색상 정의
+    highlight_color = (42/255, 74/255, 122/255, 1.0)
 
     while not glfw.window_should_close(window):
         glfw.poll_events()
@@ -321,6 +365,11 @@ def gui_thread(log_lines, timeline, lock):
         displayed_left_scale += (left_scale - displayed_left_scale) * SCALE_ADJUST_ALPHA
         displayed_right_scale += (right_scale - displayed_right_scale) * SCALE_ADJUST_ALPHA
 
+        # --- UI 렌더링 ---
+        imgui.push_style_color(imgui.COLOR_TITLE_BACKGROUND, *highlight_color)
+        imgui.push_style_color(imgui.COLOR_TITLE_BACKGROUND_ACTIVE, *highlight_color)
+        imgui.push_style_color(imgui.COLOR_TITLE_BACKGROUND_COLLAPSED, *highlight_color)
+
         # Summary (상단 좌)
         imgui.set_next_window_position(0, 0)
         imgui.set_next_window_size(half_w, half_h)
@@ -347,7 +396,7 @@ def gui_thread(log_lines, timeline, lock):
             imgui.end_table()
         imgui.end()
 
-        # Total (좌 하단) — 아래가 0(바닥), 바텀에서 위로 쌓임 — left_scale 적용
+        # Total (좌 하단)
         imgui.set_next_window_position(0, half_h)
         imgui.set_next_window_size(half_w, half_h)
         imgui.begin("Total", False, no_resize_no_move_flags)
@@ -371,15 +420,17 @@ def gui_thread(log_lines, timeline, lock):
         imgui.end_child()
         imgui.end()
 
-        # Durations (우 하단) — right_scale 적용
+        # Durations (우 하단)
         imgui.set_next_window_position(half_w, half_h)
         imgui.set_next_window_size(half_w, half_h)
         imgui.begin("Durations", False, no_resize_no_move_flags)
         avail_w, avail_h = get_content_region_avail_safe()
         draw_list = imgui.get_window_draw_list()
         pos = imgui.get_cursor_screen_pos()
-        draw_horizontal_bars(draw_list, pos, (avail_w, avail_h), displayed, displayed_right_scale)
+        draw_horizontal_bars(draw_list, pos, (avail_w, avail_h), displayed, displayed_right_scale, font_large_bold)
         imgui.end()
+
+        imgui.pop_style_color(3)
 
         imgui.render()
         impl.render(imgui.get_draw_data())

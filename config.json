@@ -1,0 +1,36 @@
+{
+  "log_file": "boot.log",
+  "start_pattern": "NOTICE:  Reset status: Power-On Reset",
+
+  "stages": [
+    { "index": 0, "name": "Bootloader" },
+    { "index": 1, "name": "Kernel" },
+    { "index": 2, "name": "Rootfs" },
+    { "index": 3, "name": "Rootfs2"},
+    { "index": 4, "name": "Rootfs3"},
+    { "index": 5, "name": "Rootfs4"}
+  ],
+
+  "markers": [
+    { "pattern": "Starting kernel \\.\\.\\.", "target": "Kernel", "when": "start" },
+    { "pattern": "Welcome to Auto Linux BSP 42\\.0 \\(kirkstone\\)!", "target": "Rootfs", "when": "start" },
+    { "pattern": "Rootfs start2", "target": "Rootfs2", "when": "start" },
+    { "pattern": "Rootfs start3", "target": "Rootfs3", "when": "start" },
+    { "pattern": "Rootfs start4", "target": "Rootfs4", "when": "start" },
+    { "pattern": "s32g399ardb3 login:", "target": "Rootfs4", "when": "end" }
+  ],
+
+  "colors": {
+    "Bootloader": [51, 153, 230],
+    "Kernel": [51, 204, 51],
+    "Rootfs": [230, 77, 77],
+    "Rootfs2": [255, 153, 51],
+    "Rootfs3": [153, 51, 255],
+    "Rootfs4": [102, 204, 255]
+  },
+
+  "anim_duration": 0.6,
+  "tick_count": 8,
+  "headroom_factor": 1.05,
+  "scale_adjust_alpha": 0.18
+}

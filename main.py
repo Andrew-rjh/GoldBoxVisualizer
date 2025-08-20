@@ -21,7 +21,7 @@ import math
 import os
 import re
 import time
-import threading 
+import threading
 from collections import deque
 
 import glfw
@@ -249,12 +249,23 @@ def format_label(val):
 # ------------------------------- Timeline / Parser ----------------------------
 
 def compute_durations(timeline):
+    """Return durations for each stage.
+       If start and end exist: end-start.
+       If start exists and end missing: now-start.
+       Otherwise 0.0.
+    """
     durations = {}
+    now = time.time()
     for stage in STAGES:
         start = timeline[stage].get("start")
         end = timeline[stage].get("end")
         try:
-            durations[stage] = (end - start) if (start and end) else 0.0
+            if start and end:
+                durations[stage] = max(0.0, end - start)
+            elif start and not end:
+                durations[stage] = max(0.0, now - start)
+            else:
+                durations[stage] = 0.0
         except Exception:
             durations[stage] = 0.0
     return durations
@@ -364,19 +375,19 @@ def draw_vertical_stack(draw_list, pos, size, displayed, max_scale):
         draw_list.add_rect_filled(bar_x, current_y - height, bar_x + bar_w, current_y, color)
         current_y -= height
 
-    # ticks & labels
+    # ticks & labels (클램프해서 잘림 방지)
     label_x = max(bar_x - 50, x + 6)
     for i in range(0, TICK_COUNT + 1):
         r = i / float(TICK_COUNT)
         ty = bar_bottom - (max_bar_h * r)
         draw_list.add_line(bar_x, ty, bar_x + bar_w, ty, grid_color)
         value = max_scale * r
-        draw_list.add_text(label_x, ty - 7, axis_color, format_label(value))
+        draw_list.add_text(label_x, max(ty - 7, y + 2), axis_color, format_label(value))
 
-    # legend
+    # legend (폭에 맞춰 중앙 정렬, 좌우 클램프)
     legend_y = bar_bottom + 6
     legend_total_w = len(STAGES) * 120
-    legend_x = x + (w - legend_total_w) / 2.0
+    legend_x = x + max((w - legend_total_w) / 2.0, 6)
     for stage in STAGES:
         color = imgui.get_color_u32_rgba(*COLORS[stage], 1)
         draw_list.add_rect_filled(legend_x, legend_y, legend_x + 18, legend_y + 18, color)
@@ -405,7 +416,7 @@ def draw_horizontal_bars(draw_list, pos, size, displayed, max_scale, font):
         tx = bar_x + bar_w * r
         draw_list.add_line(tx, bar_y, tx, bar_y + bar_h, grid_color)
         value = max_scale * r
-        draw_list.add_text(tx - 10, bar_y - 15, axis_color, format_label(value))
+        draw_list.add_text(tx - 10, max(bar_y - 15, y + 2), axis_color, format_label(value))
 
     bar_height = bar_h / max(len(STAGES), 1)
     for i, stage in enumerate(STAGES):
@@ -464,6 +475,7 @@ def gui_thread(log_lines, timeline, lock):
 
     no_resize_no_move_flags = imgui.WINDOW_NO_RESIZE | imgui.WINDOW_NO_MOVE
 
+    # 상태 변수
     displayed = {s: 0.0 for s in STAGES}
     anim_state = {s: {"running": False, "start_t": 0.0, "from": 0.0, "to": 0.0} for s in STAGES}
 
@@ -472,7 +484,11 @@ def gui_thread(log_lines, timeline, lock):
     displayed_left_scale = float(left_scale)
     displayed_right_scale = float(right_scale)
 
+    # total 애니메이션 값
+    displayed_total = 0.0
+
     highlight_color = (42/255, 74/255, 122/255, 1.0)
+    final_row_color = (0.9, 0.9, 0.4, 1.0)  # Summary TOTAL 행 강조 텍스트 색
 
     while not glfw.window_should_close(window):
         glfw.poll_events()
@@ -507,6 +523,7 @@ def gui_thread(log_lines, timeline, lock):
             right_scale = 1.0
             displayed_left_scale = 1.0
             displayed_right_scale = 1.0
+            displayed_total = 0.0
 
         now = time.time()
         width, height = glfw.get_framebuffer_size(window)
@@ -557,7 +574,8 @@ def gui_thread(log_lines, timeline, lock):
                     displayed[s] = targets[s]
 
         # dynamic scales (left: sum, right: max)
-        target_total = sum(compute_durations(timeline_copy).values())
+        durations_now = compute_durations(timeline_copy)
+        target_total = sum(durations_now.values())
         needed_left = max(sum(displayed.values()), target_total, 1e-9)
         needed_right = max(max(displayed.values()) if displayed else 1.0, 1e-9)
 
@@ -568,6 +586,10 @@ def gui_thread(log_lines, timeline, lock):
 
         displayed_left_scale += (left_scale - displayed_left_scale) * SCALE_ADJUST_ALPHA
         displayed_right_scale += (right_scale - displayed_right_scale) * SCALE_ADJUST_ALPHA
+
+        # displayed_total: 애니메이션 (sum(displayed) 기준)
+        needed_total = sum(displayed.values())
+        displayed_total += (needed_total - displayed_total) * SCALE_ADJUST_ALPHA
 
         # --- UI ---
         imgui.push_style_color(imgui.COLOR_TITLE_BACKGROUND, *highlight_color)
@@ -586,18 +608,36 @@ def gui_thread(log_lines, timeline, lock):
             imgui.table_setup_column("Duration")
             imgui.table_setup_column("Ratio")
             imgui.table_headers_row()
-            total = sum(displayed.values()) or 1.0
+            total_for_ratio = sum(displayed.values()) or 1.0
             for stage in STAGES:
                 sstart = timeline_copy[stage].get("start")
                 send = timeline_copy[stage].get("end")
-                dur = (send - sstart) if (sstart and send) else (now - sstart if sstart else 0.0)
-                ratio = (dur / total) * 100.0
+                if sstart and send:
+                    dur = max(0.0, send - sstart)
+                elif sstart and not send:
+                    dur = max(0.0, now - sstart)
+                else:
+                    dur = 0.0
+                ratio = (dur / total_for_ratio) * 100.0
                 imgui.table_next_row()
                 imgui.table_next_column(); imgui.text(stage)
                 imgui.table_next_column(); imgui.text(time.strftime('%H:%M:%S', time.localtime(sstart)) if sstart else "-")
                 imgui.table_next_column(); imgui.text(time.strftime('%H:%M:%S', time.localtime(send)) if send else "-")
-                imgui.table_next_column(); imgui.text(f"{dur:.3f}s")
+                # Duration: 2 decimal places (요구사항)
+                imgui.table_next_column(); imgui.text(f"{dur:.2f}s")
                 imgui.table_next_column(); imgui.text(f"{ratio:.1f}%")
+            # If all stages finished -> 합계 행 강조
+            all_done = all(timeline_copy[s].get("start") and timeline_copy[s].get("end") for s in STAGES)
+            if all_done:
+                total_dur = sum((timeline_copy[s]["end"] - timeline_copy[s]["start"]) for s in STAGES)
+                imgui.table_next_row()
+                imgui.push_style_color(imgui.COLOR_TEXT, *final_row_color)
+                imgui.table_next_column(); imgui.text("TOTAL")
+                imgui.table_next_column(); imgui.text("-")
+                imgui.table_next_column(); imgui.text("-")
+                imgui.table_next_column(); imgui.text(f"{total_dur:.2f}s")
+                imgui.table_next_column(); imgui.text("100.0%")
+                imgui.pop_style_color()
             imgui.end_table()
         imgui.end()
 
@@ -608,7 +648,23 @@ def gui_thread(log_lines, timeline, lock):
         avail_w, avail_h = get_content_region_avail_safe()
         draw_list = imgui.get_window_draw_list()
         pos = imgui.get_cursor_screen_pos()
+        # Draw the vertical stacked bars
         draw_vertical_stack(draw_list, pos, (avail_w, avail_h), displayed, displayed_left_scale)
+
+        # Draw animated total number at top-right of this panel (텍스트 크기 계산해서 클램프)
+        total_text = f"Total: {displayed_total:.2f}s"
+        try:
+            text_size = imgui.calc_text_size(total_text, False, -1)
+            text_w, text_h = float(text_size.x), float(text_size.y)
+        except Exception:
+            text_w, text_h = (len(total_text) * 8.0), 16.0
+        panel_x, panel_y = pos
+        panel_w, panel_h = float(avail_w), float(avail_h)
+        pad = 8.0
+        tx = max(panel_x + pad, panel_x + panel_w - text_w - pad)
+        ty = max(panel_y + pad, panel_y + pad)
+        draw_list.add_text(tx + 1, ty + 1, imgui.get_color_u32_rgba(0, 0, 0, 0.7), total_text)  # shadow
+        draw_list.add_text(tx, ty, imgui.get_color_u32_rgba(1, 1, 1, 1), total_text)
         imgui.end()
 
         # Log (top-right)
@@ -621,6 +677,15 @@ def gui_thread(log_lines, timeline, lock):
         imgui.push_style_var(imgui.STYLE_ITEM_SPACING, (0, 0))
         for line in lines_snapshot:
             imgui.text_unformatted(line)
+        # 자동 스크롤: 마지막 라인에 맞춰 아래로
+        if lines_snapshot:
+            try:
+                imgui.set_scroll_here_y(1.0)
+            except Exception:
+                try:
+                    imgui.set_scroll_here_y()
+                except Exception:
+                    pass
         imgui.pop_style_var()
         imgui.end_child()
         imgui.end()
@@ -632,7 +697,6 @@ def gui_thread(log_lines, timeline, lock):
         avail_w, avail_h = get_content_region_avail_safe()
         draw_list = imgui.get_window_draw_list()
         pos = imgui.get_cursor_screen_pos()
-        # large bold font may be None if load failed; ImGui will fallback
         draw_horizontal_bars(draw_list, pos, (avail_w, avail_h), displayed, displayed_right_scale, font_large_bold)
         imgui.end()
 

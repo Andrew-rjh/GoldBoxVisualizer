@@ -1,6 +1,6 @@
 {
-  "window_title" : "App1",
-  "log_file": "boot.log",
+  "window_title" : "App2",
+  "log_file": "boot2.log",
   "start_pattern": "NOTICE:  Reset status: Power-On Reset",
 
   "stages": [

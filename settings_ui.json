@@ -1,0 +1,31 @@
+{
+  "settings": {
+    "legend_bar_gap": 40.0,
+    "legend_right_pad": 2.0,
+    "legend_gap": 8.0,
+    "legend_box": 25.0,
+    "legend_text_ratio": 0.11999999731779099,
+    "bar_width_ratio": 0.3499999940395355,
+    "show_segment_pct": true,
+    "pct_digits": 1,
+    "total_x_pull": 61.0,
+    "total_anchor_gap": 8.0,
+    "bend_offset": 28.0,
+    "f8_unbounded": true,
+    "legend_side": "right",
+    "dur_margin": 48.0,
+    "dur_row_gap": 12.0,
+    "dur_label_gap": 10.0,
+    "dur_inside_pad_x": 8.0
+  },
+  "globals": {
+    "TICK_COUNT": 10,
+    "ANIM_DURATION": 0.5600000023841858,
+    "LABEL_ANIM_DURATION": 0.3,
+    "HEADROOM_FACTOR": 1.05,
+    "SCALE_ADJUST_ALPHA": 0.18,
+    "F8_VERTICAL_SECONDS": 6.0,
+    "F8_HORIZONTAL_SECONDS": 2.0,
+    "F8_ANIM_DURATION": 0.5
+  }
+}

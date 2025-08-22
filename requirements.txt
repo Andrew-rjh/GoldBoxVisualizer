@@ -1,13 +1,10 @@
-# Core UI / OpenGL
-imgui[glfw]>=2.0       # pyimgui (glfw 통합 extras). 설치 시 PyOpenGL/glfw를 자동으로 가져올 수 있음.
+# UI / Rendering
+imgui[glfw]>=2.0
 PyOpenGL>=3.1
 glfw>=2.0
 
-# Optional: YAML config support
+# Optional: YAML 설정 파일
 PyYAML>=6.0
 
-# Optional: Global hotkeys for Linux
-evdev>=1.5   # Linux-only, 권한/디바이스 접근 필요. (주석 처리 가능)
-
-# Misc (utilities often useful)
-setuptools>=65.0
+# Optional: 리눅스 전역 핫키 (evdev가 없으면 GLFW 폴백 사용)
+evdev>=1.5; sys_platform == "linux"

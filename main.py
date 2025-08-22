@@ -27,6 +27,7 @@ import imgui
 from imgui.integrations.glfw import GlfwRenderer
 
 # evdev (global hotkeys). optional dependency
+
 try:
     from evdev import InputDevice, list_devices, ecodes
 except Exception:
@@ -461,6 +462,67 @@ def start_hotkey_queue() -> "tuple[queue.Queue[str], list]":
                 pass
     return q, workers
 
+# ---------- 개선된 attach_window_hotkeys (콜백 체이닝 + 디버그) ----------
+def attach_window_hotkeys(window, q: "queue.Queue[str]"):
+    """
+    Attach a GLFW key callback that pushes the same action strings into q.
+    This implementation chains to any previous callback returned by glfw.set_key_callback.
+    """
+    if window is None:
+        return
+
+    GLWF_KEY_MAP = {
+        glfw.KEY_INSERT: "TOGGLE_SETTINGS",
+        glfw.KEY_KP_0:   "TOGGLE_SETTINGS",
+        glfw.KEY_F10:    "RESET",
+        glfw.KEY_F2:     "SPAWN_SEQ",
+        glfw.KEY_F8:     "SET_F8_SCALES",
+    }
+
+    # define our callback which will call the previous callback if present
+    def _key_cb(window_handle, key, scancode, action, mods):
+        try:
+            # debug line (remove or guard behind a verbose flag in production)
+            # print(f"[kb] key={key} action={action} mods={mods}")
+            if action == glfw.PRESS:
+                act = GLWF_KEY_MAP.get(key)
+                if act:
+                    try:
+                        q.put(act)
+                        # quick debug:
+                        print(f"[hotkeys] queued action: {act}")
+                    except Exception:
+                        pass
+        except Exception as e:
+            print("[hotkeys] callback error:", e)
+        # Note: we intentionally don't return value; GLFW callbacks don't use return
+
+    try:
+        # set_key_callback returns the previous callback (or None)
+        prev_cb = glfw.set_key_callback(window, _key_cb)
+    except Exception:
+        prev_cb = None
+
+    # if there was a previous callback (e.g. GlfwRenderer), chain it by wrapping
+    if prev_cb is not None:
+        # create a wrapper that calls both our handler and the previous one
+        def _chained_cb(window_handle, key, scancode, action, mods):
+            try:
+                _key_cb(window_handle, key, scancode, action, mods)
+            except Exception:
+                pass
+            try:
+                prev_cb(window_handle, key, scancode, action, mods)
+            except Exception:
+                pass
+        try:
+            glfw.set_key_callback(window, _chained_cb)
+        except Exception:
+            # if chaining fails, at least our handler is installed (prev_cb already replaced)
+            pass
+# ------------------------------------------------------------------
+
+
 # ------------------------------- ImGui Helpers --------------------------------
 
 def get_content_region_avail_safe():
@@ -740,7 +802,7 @@ def draw_horizontal_bars(draw_list, pos, size, displayed, max_scale, font,
 
 # ------------------------------- GUI Thread -----------------------------------
 
-def gui_thread(log_lines, timeline, lock, hotkey_q: "queue.Queue[str]"):
+def gui_thread(log_lines, timeline, lock, hotkey_q: "queue.Queue[str]", hotkey_workers: list):
     global TICK_COUNT, ANIM_DURATION, LABEL_ANIM_DURATION, HEADROOM_FACTOR, SCALE_ADJUST_ALPHA
     global F8_VERTICAL_SECONDS, F8_HORIZONTAL_SECONDS, F8_ANIM_DURATION
 
@@ -756,6 +818,16 @@ def gui_thread(log_lines, timeline, lock, hotkey_q: "queue.Queue[str]"):
     glfw.make_context_current(window)
     try:
         glfw.set_input_mode(window, glfw.STICKY_KEYS, glfw.TRUE)
+    except Exception:
+        pass
+
+    # evdev 기반 워커가 없으면 윈도우 키콜백을 폴백으로 붙임
+    try:
+        if not hotkey_workers:
+            attach_window_hotkeys(window, hotkey_q)
+            print("[hotkeys] glfw key callback attached (evdev unavailable)")
+        else:
+            print("[hotkeys] evdev workers present; glfw callback not attached")
     except Exception:
         pass
 
@@ -810,6 +882,20 @@ def gui_thread(log_lines, timeline, lock, hotkey_q: "queue.Queue[str]"):
     impl = GlfwRenderer(window)
     try:
         impl.refresh_font_texture()
+    except Exception:
+        pass
+
+    try:
+        if not hotkey_workers:
+            attach_window_hotkeys(window, hotkey_q)
+            # 포커스 요청(테스트용)
+            try:
+                glfw.focus_window(window)
+            except Exception:
+                pass
+            print("[hotkeys] glfw key callback attached (evdev unavailable)")
+        else:
+            print("[hotkeys] evdev workers present; glfw callback not attached")
     except Exception:
         pass
 
@@ -1160,7 +1246,7 @@ def gui_thread(log_lines, timeline, lock, hotkey_q: "queue.Queue[str]"):
                     settings_visible = not settings_visible
                     if settings_visible:
                         want_focus_settings = True
-                    print(f"[hotkeys] Settings {'shown' if settings_visible else 'hidden'} (evdev)")
+                    print(f"[hotkeys] Settings {'shown' if settings_visible else 'hidden'} (evdev/glfw)")
         except queue.Empty:
             pass
 
@@ -1647,13 +1733,13 @@ def main():
     lock = threading.Lock()
 
     # start hotkey monitor
-    hotkey_q, _workers = start_hotkey_queue()
+    hotkey_q, workers = start_hotkey_queue()
 
     # pass hotkey_q/control_q to log_thread so it can emit AUTO_RESET on start-pattern
     t = threading.Thread(target=log_thread, args=(log_lines, timeline, lock, hotkey_q), daemon=True)
     t.start()
 
-    gui_thread(log_lines, timeline, lock, hotkey_q)
+    gui_thread(log_lines, timeline, lock, hotkey_q, workers)
 
 if __name__ == "__main__":
     main()
